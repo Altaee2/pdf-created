@@ -1,1 +1,5 @@
 gunicorn
+pyTelegramBotAPI
+reportlab
+arabic-reshaper
+python-bidi
