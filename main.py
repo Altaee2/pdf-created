@@ -59,29 +59,30 @@ def convert_markdown_to_html(text):
     text = re.sub(r'`(.*?)`', r'<font name="Courier" color="red">\1</font>', text)
     return text
 
+# أضف هذه لتهيئة بيانات التقارير الجامعية بداخل قاموس المستخدم
 def init_user_settings(chat_id, first_name=""):
-    """تهيئة إعدادات المستخدم الافتراضية إذا لم تكن موجودة"""
     if chat_id not in user_data:
         user_data[chat_id] = {
             'text_list': [],
             'font_size': 14,
             'theme': 'classic',
-            'watermark': '', # إذا فارغة ستصبح باسمه تلقائياً
             'password': '',
-            'user_display_name': first_name if first_name else "مستخدم البوت"
+            'user_display_name': first_name if first_name else "مستخدم البوت",
+            'mode': 'normal', # normal للوضع العادي، أو report لوضع التقارير
+            'report_info': {}, # لحفظ بيانات واجهة التقرير بالتفصيل
         }
 
 def get_main_settings_keyboard():
-    """توليد لوحة التحكم الرئيسية بالأزرار"""
+    """توليد لوحة التحكم الرئيسية بالأزرار مع خيار التقرير الجامعي"""
     markup = telebot.types.InlineKeyboardMarkup(row_width=2)
+    # الزر الجديد لإنشاء تقرير
+    markup.add(telebot.types.InlineKeyboardButton("📝 بدء الان لإنشاء تقرير جامعي مخصص", callback_data="menu_start_report"))
     markup.add(
         telebot.types.InlineKeyboardButton("🎨 اختيار ثيم الألوان", callback_data="menu_theme"),
         telebot.types.InlineKeyboardButton("📏 حجم خط المتن", callback_data="menu_size"),
-        telebot.types.InlineKeyboardButton("🏷️ تخصيص علامة مائية", callback_data="menu_watermark"),
         telebot.types.InlineKeyboardButton("🔒 قفل بكلمة سر", callback_data="menu_password")
     )
     return markup
-
 @bot.message_handler(commands=['start', 'help', 'settings'])
 def send_welcome(message):
     chat_id = message.chat.id
@@ -92,10 +93,131 @@ def send_welcome(message):
         "⚙️ **لوحة التحكم والأزرار:**\n"
         "يمكنك تخصيص كل ميزات المستند الخاص بك مباشرة من الأزرار أدناه بدون الحاجة لكتابة أوامر يدوية.\n\n"
         "📥 **بدء العمل:**\n"
-        "أرسل أول نص أو ملف نصي مباشرة وسأقوم بتجميعه وتنسيقه لك."
+        "اضغط على زر <البدء> لبدء انشاء تقريرك الان: "
     )
     bot.send_message(chat_id, welcome_text, parse_mode="Markdown", reply_markup=get_main_settings_keyboard())
+@bot.callback_query_handler(func=lambda call: call.data == "menu_start_report")
+def start_report_flow(call):
+    chat_id = call.message.chat.id
+    init_user_settings(chat_id, call.from_user.first_name)
+    
+    # تحويل حالة المستخدم إلى وضع كتابة التقرير وتصفير القائمة السابقة
+    user_data[chat_id]['mode'] = 'report'
+    user_data[chat_id]['text_list'] = []
+    user_data[chat_id]['report_info'] = {}
+    
+    bot.answer_callback_query(call.id)
+    msg = bot.edit_message_text("🏢 ممتاز! لنبدأ بتجهيز واجهة التقرير الفخمة.\n\nأرسل الآن **اسم الجامعة** (مثال: جامعة القادسية):", chat_id, call.message.message_id, parse_mode="Markdown")
+    bot.register_next_step_handler(msg, ask_report_college)
 
+def ask_report_college(message):
+    chat_id = message.chat.id
+    user_data[chat_id]['report_info']['university'] = message.text.strip()
+    msg = bot.reply_to(message, "📐 أرسل الآن **اسم الكلية** (مثال: كلية علوم الحاسوب وتكنولوجيا المعلومات):")
+    bot.register_next_step_handler(msg, ask_report_department)
+
+def ask_report_department(message):
+    chat_id = message.chat.id
+    user_data[chat_id]['report_info']['college'] = message.text.strip()
+    # طلب الشعار من المستخدم كصورة
+    msg = bot.reply_to(message, "🖼️ الآن، يرجى إرسال **شعار الكلية أو الجامعة كصورة (Photo)** ليتم وضعه في الواجهة \n ملاحظة ارسل الصورة كملف لكي تحتفظ بالدقة : \n اذا كانت تحتاج لأزالة الخلفية استخدم البوت @z0A_Bot لكي تزيل الخلفية:")
+    bot.register_next_step_handler(msg, catch_report_logo)
+
+def catch_report_logo(message):
+    chat_id = message.chat.id
+    file_id = None
+    file_name = ""
+
+    # 1. التحقق إذا أرسل المستخدم الشعار كملف (Document) للحفاظ على الدقة
+    if message.content_type == 'document':
+        file_name = message.document.file_name.lower()
+        # التأكد من أن الملف المرسل هو صورة بالفعل من خلال صيغته
+        if file_name.endswith(('.png', '.jpg', '.jpeg', '.webp')):
+            file_id = message.document.file_id
+        else:
+            msg = bot.reply_to(message, "⚠️ الملف المرسل ليس صورة! يرجى إرسال شعار الكلية كصورة أو كملف بترميز (PNG, JPG, JPEG):")
+            bot.register_next_step_handler(msg, catch_report_logo)
+            return
+
+    # 2. التحقق إذا أرسل المستخدم الشعار كصورة عادية (Photo)
+    elif message.content_type == 'photo':
+        file_id = message.photo[-1].file_id
+        file_name = "logo.jpg" # صيغة افتراضية للحفظ
+
+    # إذا لم يرسل أي منهما
+    else:
+        msg = bot.reply_to(message, "⚠️ يرجى إرسال شعار الكلية كصورة أو كملف مستند (Document) للحفاظ على الدقة:")
+        bot.register_next_step_handler(msg, catch_report_logo)
+        return
+
+    # 3. تحميل ومعالجة الملف بعد الحصول على الـ file_id بنجاح
+    if file_id:
+        status = bot.reply_to(message, "⏳ جاري تحميل الشعار بالدقة الكاملة ومعالجته...")
+        file_info = bot.get_file(file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+        
+        # استخراج الامتداد الأصلي للملف للحفاظ على شفافية الـ PNG إن وجدت
+        ext = ".jpg"
+        if '.' in file_name:
+            ext = f".{file_name.split('.')[-1]}"
+            
+        logo_path = f"logo_{chat_id}{ext}"
+        
+        with open(logo_path, 'wb') as new_file:
+            new_file.write(downloaded_file)
+            
+        user_data[chat_id]['report_info']['logo_path'] = logo_path
+        bot.delete_message(chat_id, status.message_id)
+        
+        # الانتقال للسؤال التالي بسلاسة
+        msg = bot.send_message(chat_id, "🔬 أرسل الآن **اسم القسم العلمي** (مثال: قسم علوم الحاسوب):")
+        bot.register_next_step_handler(msg, ask_report_title)
+
+def ask_report_title(message):
+    chat_id = message.chat.id
+    user_data[chat_id]['report_info']['department'] = message.text.strip()
+    msg = bot.reply_to(message, "📚 أرسل الآن **عنوان أو اسم التقرير** (مثال: معمارية الحاسوب):")
+    bot.register_next_step_handler(msg, ask_report_student_name)
+
+def ask_report_student_name(message):
+    chat_id = message.chat.id
+    user_data[chat_id]['report_info']['title'] = message.text.strip()
+    msg = bot.reply_to(message, "👤 أرسل الآن **اسم الطالب الثلاثي**:")
+    bot.register_next_step_handler(msg, ask_report_stage)
+
+def ask_report_stage(message):
+    chat_id = message.chat.id
+    user_data[chat_id]['report_info']['student_name'] = message.text.strip()
+    msg = bot.reply_to(message, "🔢 أرسل **المرحلة الدراسية والشعبة** (مثال: المرحلة الأولى - شعبة A):")
+    bot.register_next_step_handler(msg, ask_report_study_type)
+
+def ask_report_study_type(message):
+    chat_id = message.chat.id
+    user_data[chat_id]['report_info']['stage'] = message.text.strip()
+    msg = bot.reply_to(message, "☀️ أرسل **نوع الدراسة** (صباحي أم مسائي):")
+    bot.register_next_step_handler(msg, ask_report_subject)
+
+def ask_report_subject(message):
+    chat_id = message.chat.id
+    user_data[chat_id]['report_info']['study_type'] = message.text.strip()
+    msg = bot.reply_to(message, "📖 أرسل **اسم المادة الدراسية** (مثال: هياكل بيانات):")
+    bot.register_next_step_handler(msg, ask_report_professor)
+
+def ask_report_professor(message):
+    chat_id = message.chat.id
+    user_data[chat_id]['report_info']['subject'] = message.text.strip()
+    msg = bot.reply_to(message, "👨‍🏫 أرسل **اسم الدكتور المشرف**:")
+    bot.register_next_step_handler(msg, save_final_report_info)
+
+def save_final_report_info(message):
+    chat_id = message.chat.id
+    user_data[chat_id]['report_info']['professor'] = message.text.strip()
+    
+    welcome_content_msg = (
+        "✅ **تم حفظ معلومات الواجهة بدقة متناهية وترتيب صحيح!**\n\n"
+        "📥 الآن، تفضل بإرسال **محتوى التقرير الداخلي (النصوص أو الملفات)** التي تريد دمجها خلف صفحة الواجهة مباشرة، وعند الانتهاء اضغط على زر التوليد."
+    )
+    bot.send_message(chat_id, welcome_content_msg, parse_mode="Markdown")
 @bot.callback_query_handler(func=lambda call: call.data.startswith("menu_"))
 def handle_menu_navigation(call):
     chat_id = call.message.chat.id
@@ -275,7 +397,100 @@ def generate_pdf_v5(chat_id):
         
         styles = getSampleStyleSheet()
         story = []
-        
+    # ---- إضافة قالب واجهة التقرير الجامعي المخصص ----
+        # ---- الهيكل المطور والمطابق لقالب الواجهة الجامعية المعتمد ----
+        # ---- الهيكل المطور والمطابق لقالب الواجهة الجامعية مع الشعار المخصص ----
+        if data.get('mode') == 'report' and 'report_info' in data:
+            info = data['report_info']
+            from reportlab.platypus import Table, TableStyle, PageBreak, Image
+            from reportlab.lib.colors import HexColor
+            
+            story.append(Spacer(1, 10))
+            
+            # 1. إعداد وتنسيق نصوص الوزارة والجامعة بالجهة اليمنى
+            right_text_style = ParagraphStyle(
+                'RepHeaderRight', parent=styles['Normal'], fontName=FONT_NAME, fontSize=20, leading=24, alignment=TA_RIGHT
+            )
+            
+            header_paragraphs = [
+                Paragraph(process_arabic_text("جمهوريــــــة الـــعراق"), right_text_style),
+                Paragraph(process_arabic_text("وزارة التعليم العالي والبحث العلمي"), right_text_style),
+                Paragraph(process_arabic_text(f"جامعة {info.get('university', '')}"), right_text_style),
+                Paragraph(process_arabic_text(f"كلية {info.get('college', '')}"), right_text_style),
+                Paragraph(process_arabic_text(f"قسم {info.get('department', '')}"), right_text_style),
+            ]
+            # 2. التحقق من وجود الشعار ومعالجته لوضعه بالجهة اليسرى
+            logo_img = ""
+            user_logo_path = info.get('logo_path', '')
+            if user_logo_path and os.path.exists(user_logo_path):
+                logo_img = Image(user_logo_path, width=130, height=130)
+                logo_img.hAlign = 'LEFT'
+            else:
+                # مساحة فارغة بديلة لحماية التنسيق في حال لم يرسل صورة لأي سبب
+                logo_img = Paragraph("", right_text_style)
+                
+            # 3. دمج النصوص والشعار في سطر واحد متوازن باستخدام جدول شفاف (بدون حدود)
+            # العرض الإجمالي المتوفر هو 480 بكسل (نقسمها: 120 للشعار و 360 للنصوص)
+            top_table_data = [[logo_img, header_paragraphs]]
+            top_table = Table(top_table_data, colWidths=[130, 380])
+            top_table.setStyle(TableStyle([
+                ('VALIGN', (0,0), (-1,-1), 'TOP'),   # محاذاة العناصر من الأعلى بالتساوي
+                ('ALIGN', (0,0), (0,0), 'LEFT'),     # الشعار لليسار تماماً
+                ('ALIGN', (1,0), (1,0), 'RIGHT'),    # النصوص لليمين تماماً
+                ('BOTTOMPADDING', (0,0), (-1,-1), 0),
+                ('TOPPADDING', (0,0), (-1,-1), 0),
+            ]))
+            story.append(top_table)
+            
+            # مسافة فارغة تفصل الترويسة والشعار عن مستطيل عنوان التقرير
+            story.append(Spacer(1, 50))
+            
+            # 2. مستطيل اسم التقرير (خلفية زرقاء مريحة ونص أبيض ممتد في المنتصف)
+            title_text_style = ParagraphStyle(
+                'TitleText', parent=styles['Normal'], fontName=FONT_NAME, fontSize=20, textColor=HexColor('#FFFFFF'), alignment=TA_CENTER
+            )
+            title_p = Paragraph(process_arabic_text(f"{info.get('title', '')}"), title_text_style)
+            
+            title_box = Table([[title_p]], colWidths=[320], rowHeights=[45])
+            title_box.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,-1), HexColor("#22679B")),
+                ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 10),
+            ]))
+            story.append(title_box)
+            
+            story.append(Spacer(1, 120)) # مسافة تفصل بين عنوان التقرير وصندوق معلومات الطالب
+            
+            # 3. صندوق معلومات الطالب والمشرف (خلفية خضراء ناعمة ونصوص واضحة من اليمين لليسار)
+            info_text_style = ParagraphStyle(
+                'InfoText', parent=styles['Normal'], fontName=FONT_NAME, fontSize=15, leading=22, alignment=TA_RIGHT
+            )
+            
+            student_data_p = [
+                Paragraph(process_arabic_text(f"الاسم: {info.get('student_name', '')}"), info_text_style),
+                Paragraph(process_arabic_text(f"المرحلة: {info.get('stage', '')}"), info_text_style),
+                Paragraph(process_arabic_text(f"الدراسة: {info.get('study_type', '')}"), info_text_style),
+                Paragraph(process_arabic_text(f"المادة: {info.get('subject', '')}"), info_text_style),
+                Paragraph(process_arabic_text(f"الاشراف: {info.get('professor', '')}"), info_text_style),
+            ]
+            
+            info_box = Table([[student_data_p]], colWidths=[280])
+            info_box.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,-1), HexColor('#8BC38A')),
+                ('ALIGN', (0,0), (-1,-1), 'RIGHT'),
+                ('VALIGN', (0,0), (-1,-1), 'TOP'),
+                ('TOPPADDING', (0,0), (-1,-1), 15),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 15),
+                ('RIGHTPADDING', (0,0), (-1,-1), 20),
+                ('LEFTPADDING', (0,0), (-1,-1), 20),
+            ]))
+            story.append(info_box)
+            
+            # قفزة حتمية لتبدأ صفحات التقرير والمقالات الفعلية من الصفحة الثانية
+            story.append(PageBreak())
+        # ---------------------------------------------------------------------
+        # ------------------------------------------------    
         lines = combined_raw_text.split('\n')
         for idx, line in enumerate(lines):
             if line.strip():
@@ -343,22 +558,22 @@ def generate_pdf_v5(chat_id):
             canvas.rect(padding + 4, padding + 4, width - ((padding + 4) * 2), height - ((padding + 4) * 2))
             
             # رسم العلامة المائية المخصصة/التلقائية بالخلفية
-            canvas.setFont(FONT_NAME, 40)
-            canvas.setFillColor(HexColor(theme_colors['primary']))
-            canvas.setFillAlpha(0.12)
-            canvas.saveState()
-            canvas.translate(width/2, height/2)
-            canvas.rotate(45)
-            canvas.drawCentredString(0, 0, process_arabic_text(watermark_text))
-            canvas.restoreState()
-            canvas.setFillAlpha(1.0)
-            
+            #canvas.setFont(FONT_NAME, 40)
+            #canvas.setFillColor(HexColor(theme_colors['primary']))
+            #canvas.setFillAlpha(0.12)
+            #canvas.saveState()
+            #canvas.translate(width/2, height/2)
+            #canvas.rotate(45)
+            #canvas.drawCentredString(0, 0, process_arabic_text(watermark_text))
+            #canvas.restoreState()
+            #canvas.setFillAlpha(1.0)
+
+        
             # طباعة التذييل ورقم الصفحة وحفظ حقوق البوت
-            canvas.setFont(FONT_NAME, 9)
+            canvas.setFont(FONT_NAME, 12)
             canvas.setFillColor(HexColor(theme_colors['primary']))
             footer_processed = process_arabic_text(f"صفحة {doc.page}")
             canvas.drawRightString(width - 56, 42, footer_processed)
-            
             canvas.restoreState()
 
         # قفل الملف وحمايته بكلمة سر قبل البناء إن وجدت
@@ -397,6 +612,10 @@ def generate_pdf_v5(chat_id):
         # تنظيف السيرفر وحذف المؤقتات لحماية الخصوصية
         if os.path.exists(pdf_filename):
             os.remove(pdf_filename)
+            # تنظيف وحذف ملف صورة الشعار المؤقت للحفاظ على مساحة السيرفر
+        user_logo_path = data.get('report_info', {}).get('logo_path', '')
+        if user_logo_path and os.path.exists(user_logo_path):
+            os.remove(user_logo_path)
         user_data.pop(chat_id, None)
         
     except Exception as e:
